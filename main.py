@@ -121,10 +121,11 @@ def load_cremad(percent_train):
 
 def build_finetune_model(base_model, num_classes):
     x = base_model.output
+    print(x.shape)
 
-    # New softmax layer
     x = Dense(512, activation='relu')(x)
-    predictions = Dense(num_classes, activation='softmax')(x) 
+    print(x.shape)
+    predictions = Dense(num_classes, activation='softmax')(x)
     
     finetune_model = Model(inputs=base_model.input, outputs=predictions)
 
@@ -136,18 +137,16 @@ num_train_images = 0
 num_val_images = 0
 
 trill_model = tf.keras.models.Sequential()
-trill_model.add(tf.keras.Input((N_sequence,)))  # Input is [bs, input_length]
+trill_model.add(keras.layers.Input(batch_shape=(None, N_sequence)))  # Input is [bs, input_length]
 trill_layer = hub.KerasLayer(
     handle='https://tfhub.dev/google/nonsemantic-speech-benchmark/trill-distilled/3',
-    trainable=True,
+    trainable=False,
     arguments={'sample_rate': tf.constant(16000, tf.int32)},
     output_key='embedding',
-    output_shape=[None, 2048]
+    output_shape=[None,2048]
 )
 trill_model.add(trill_layer)
-
-assert trill_layer.trainable_variables
-
+# assert trill_layer.trainable_variables
 model = build_finetune_model(trill_model, 4)
 
 # #test model
@@ -155,13 +154,13 @@ model = build_finetune_model(trill_model, 4)
 # inp = np.vstack((wav_as_float_or_int16,wav_as_float_or_int16))
 # emb = model(inp)
 # print(emb)
+# sys.exit()
 
+loss_fn = keras.losses.SparseCategoricalCrossentropy(from_logits=False)
 optimizer = Adam(lr=0.0001)
-model.compile(optimizer, loss='categorical_crossentropy', metrics=['accuracy'])
+model.compile(optimizer, loss=loss_fn, metrics=['accuracy'])
 
 model.summary()
-
-loss_fn = keras.losses.SparseCategoricalCrossentropy(from_logits=True)
 
 # Prepare the training dataset.
 X_train = data_train[0].tolist()
@@ -185,19 +184,21 @@ val_dataset = val_dataset.batch(BATCH_SIZE)
 test_dataset = tf.data.Dataset.from_tensor_slices((X_test, Y_test))
 test_dataset = test_dataset.batch(BATCH_SIZE)
 
-for epoch in range(NUM_EPOCHS):
-    print("\nStart of epoch %d" % (epoch,))
-    for step, (x_batch_train, y_batch_train) in enumerate(train_dataset):
-        with tf.GradientTape() as tape:
-            logits = model(x_batch_train, training=True)  # Logits for this minibatch
-            loss_value = loss_fn(y_batch_train, logits)
+model.fit(train_dataset, validation_data=val_dataset, epochs=NUM_EPOCHS)
 
-            grads = tape.gradient(loss_value, model.trainable_weights)
-            optimizer.apply_gradients(zip(grads, model.trainable_weights))
-            if step % 200 == 0:
-                print(
-                    "Training loss (for one batch) at step %d: %.4f"
-                    % (step, float(loss_value))
-                )
-                print("Seen so far: %s samples" % ((step + 1) * BATCH_SIZE))
+# for epoch in range(NUM_EPOCHS):
+#     print("\nStart of epoch %d" % (epoch,))
+#     for step, (x_batch_train, y_batch_train) in enumerate(train_dataset):
+#         with tf.GradientTape(persistent=True) as tape:
+#             logits = model(x_batch_train, training=True)  # Logits for this minibatch
+#             loss_value = loss_fn(y_batch_train, logits)
+
+#         grads = tape.gradient(loss_value, model.trainable_weights)
+#         optimizer.apply_gradients(zip(grads, model.trainable_weights))
+#         if step % 200 == 0:
+#             print(
+#                 "Training loss (for one batch) at step %d: %.4f"
+#                 % (step, float(loss_value))
+#             )
+#             print("Seen so far: %s samples" % ((step + 1) * BATCH_SIZE))
 model.save("saved_models")
