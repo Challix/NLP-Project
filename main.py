@@ -3,6 +3,7 @@ tf.enable_v2_behavior()
 assert tf.executing_eagerly()
 import tensorflow_hub as hub
 from tensorflow import keras
+import tensorflow_text as text
 
 from tensorflow.keras.layers import Dense, Activation, Flatten, Dropout
 from tensorflow.keras.models import Sequential, Model
@@ -24,19 +25,7 @@ import librosa
 import pandas as pd
 import glob
 import random
-
 import sys
-
-# set up GPU's
-os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
-os.environ["CUDA_VISIBLE_DEVICES"]="0"
-
-BATCH_SIZE = 2
-NUM_EPOCHS = 10
-PERCENT_TRAIN = 0.8
-# N_sequence = 80000
-N_sequence = 1000
-model_name = 'trill'
 
 def load_cremad(percent_train):
     # TODO: Change below to your crema path
@@ -121,84 +110,111 @@ def load_cremad(percent_train):
 
 def build_finetune_model(base_model, num_classes):
     x = base_model.output
-
-    # New softmax layer
     x = Dense(512, activation='relu')(x)
-    predictions = Dense(num_classes, activation='softmax')(x) 
+    predictions = Dense(num_classes, activation='softmax')(x)
     
     finetune_model = Model(inputs=base_model.input, outputs=predictions)
 
     return finetune_model
 
+BATCH_SIZE = 2
+NUM_EPOCHS = 1
+PERCENT_TRAIN = 0.8
+N_sequence = 1000
+loss_fn = keras.losses.SparseCategoricalCrossentropy(from_logits=False)
+optimizer = Adam(lr=0.0001)
+
 data_train, data_val, data_test = load_cremad(PERCENT_TRAIN)
 
-num_train_images = 0
-num_val_images = 0
+# Prepare the audio training dataset.
+X_train_audio = data_train[0].tolist()
+X_val_audio = data_val[0].tolist()
+X_test_audio = data_test[0].tolist()
 
-trill_model = tf.keras.models.Sequential()
-trill_model.add(tf.keras.Input((N_sequence,)))  # Input is [bs, input_length]
-trill_layer = hub.KerasLayer(
-    handle='https://tfhub.dev/google/nonsemantic-speech-benchmark/trill-distilled/3',
-    trainable=True,
-    arguments={'sample_rate': tf.constant(16000, tf.int32)},
-    output_key='embedding',
-    output_shape=[None, 2048]
-)
-trill_model.add(trill_layer)
-
-assert trill_layer.trainable_variables
-
-model = build_finetune_model(trill_model, 4)
-
-# #test model
-# wav_as_float_or_int16 = np.sin(np.linspace(-np.pi, np.pi, N_sequence), dtype=np.float32)
-# inp = np.vstack((wav_as_float_or_int16,wav_as_float_or_int16))
-# emb = model(inp)
-# print(emb)
-
-optimizer = Adam(lr=0.0001)
-model.compile(optimizer, loss='categorical_crossentropy', metrics=['accuracy'])
-
-model.summary()
-
-loss_fn = keras.losses.SparseCategoricalCrossentropy(from_logits=True)
-
-# Prepare the training dataset.
-X_train = data_train[0].tolist()
-X_val = data_val[0].tolist()
-X_test = data_test[0].tolist()
-
-Y_train = data_train[1].tolist()
-Y_val = data_val[1].tolist()
-Y_test = data_test[1].tolist()
+Y_train_audio = data_train[1].tolist()
+Y_val_audio = data_val[1].tolist()
+Y_test_audio = data_test[1].tolist()
 
 # Prepare the train dataset.
-print("creating train dataset")
-train_dataset = tf.data.Dataset.from_tensor_slices((X_train, Y_train))
-train_dataset = train_dataset.shuffle(buffer_size=1024).batch(BATCH_SIZE)
+print("creating audio dataset")
+train_dataset_audio = tf.data.Dataset.from_tensor_slices((X_train_audio, Y_train_audio))
+train_dataset_audio = train_dataset_audio.shuffle(buffer_size=1024).batch(BATCH_SIZE)
+# Prepare the validation dataset.
+val_dataset_audio = tf.data.Dataset.from_tensor_slices((X_val_audio, Y_val_audio))
+val_dataset_audio = val_dataset_audio.batch(BATCH_SIZE)
+# Prepare the validation dataset.
+test_dataset_audio = tf.data.Dataset.from_tensor_slices((X_test_audio, Y_test_audio))
+test_dataset_audio = test_dataset_audio.batch(BATCH_SIZE)
+
+print('building audio model')
+trill_model = tf.keras.models.Sequential()
+trill_model.add(keras.layers.Input(batch_shape=(None, N_sequence)))  # Input is [bs, input_length]
+trill_layer = hub.KerasLayer(
+    handle='https://tfhub.dev/google/nonsemantic-speech-benchmark/trill-distilled/3',
+    trainable=False,
+    arguments={'sample_rate': tf.constant(16000, tf.int32)},
+    output_key='embedding',
+    output_shape=[None,2048]
+)
+trill_model.add(trill_layer)
+audio_model = build_finetune_model(trill_model, 4)
+
+audio_model.compile(optimizer, loss=loss_fn, metrics=['accuracy'])
+audio_model.summary()
+
+print('fitting audio model')
+audio_model.fit(train_dataset_audio, validation_data=val_dataset_audio, epochs=NUM_EPOCHS)
+
+score = audio_model.evaluate(X_test_audio, Y_test_audio, verbose = 0) 
+print('Audio Model Test loss:', score[0]) 
+print('Audio Model Test accuracy:', score[1])
+
+
+print("creating text dataset")
+X_train_text = data_train[2].tolist()
+X_val_text = data_val[2].tolist()
+X_test_text = data_test[2].tolist()
+
+Y_train_text = data_train[1].tolist()
+Y_val_text = data_val[1].tolist()
+Y_test_text = data_test[1].tolist()
+
+train_dataset_text = tf.data.Dataset.from_tensor_slices((X_train_text, Y_train_text))
+train_dataset_text = train_dataset_text.shuffle(buffer_size=1024).batch(BATCH_SIZE)
 
 # Prepare the validation dataset.
-val_dataset = tf.data.Dataset.from_tensor_slices((X_val, Y_val))
-val_dataset = val_dataset.batch(BATCH_SIZE)
-
+val_dataset_text = tf.data.Dataset.from_tensor_slices((X_val_text, Y_val_text))
+val_dataset_text = val_dataset_text.batch(BATCH_SIZE)
 # Prepare the validation dataset.
-test_dataset = tf.data.Dataset.from_tensor_slices((X_test, Y_test))
-test_dataset = test_dataset.batch(BATCH_SIZE)
+test_dataset_text = tf.data.Dataset.from_tensor_slices((X_test_text, Y_test_text))
+test_dataset_text = test_dataset_text.batch(BATCH_SIZE)
 
-for epoch in range(NUM_EPOCHS):
-    print("\nStart of epoch %d" % (epoch,))
-    for step, (x_batch_train, y_batch_train) in enumerate(train_dataset):
-        with tf.GradientTape() as tape:
-            logits = model(x_batch_train, training=True)  # Logits for this minibatch
-            loss_value = loss_fn(y_batch_train, logits)
+print('building text model')
+#build bert model
+text_input = tf.keras.layers.Input(shape=(), dtype=tf.string)
+preprocessor = hub.KerasLayer(
+    "https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/3")
+encoder_inputs = preprocessor(text_input)
+encoder = hub.KerasLayer(
+    "https://tfhub.dev/tensorflow/bert_en_wwm_uncased_L-24_H-1024_A-16/4",
+    trainable=True)
+outputs = encoder(encoder_inputs)
+pooled_output = outputs["pooled_output"]   
+bert_model = tf.keras.Model(text_input, pooled_output)
+text_model = build_finetune_model(bert_model, 4)
 
-            grads = tape.gradient(loss_value, model.trainable_variables)
-            optimizer.apply_gradients(zip(grads, model.trainable_variables))
+text_model.compile(optimizer, loss=loss_fn, metrics=['accuracy'])
+text_model.summary()
+
+            grads = tape.gradient(loss_value, model.trainable_weights)
+            optimizer.apply_gradients(zip(grads, model.trainable_weights))
             if step % 200 == 0:
                 print(
                     "Training loss (for one batch) at step %d: %.4f"
                     % (step, float(loss_value))
                 )
                 print("Seen so far: %s samples" % ((step + 1) * BATCH_SIZE))
-
 model.save("saved_models")
+
+print('Text Model Test loss:', score[0]) 
+print('Text Model Test accuracy:', score[1])
