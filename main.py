@@ -4,10 +4,10 @@ assert tf.executing_eagerly()
 import tensorflow_hub as hub
 from tensorflow import keras
 
-from keras.layers import Dense, Activation, Flatten, Dropout
-from keras.models import Sequential, Model
-from keras.optimizers import SGD, Adam
-from keras.callbacks import ModelCheckpoint, TensorBoard
+from tensorflow.keras.layers import Dense, Activation, Flatten, Dropout
+from tensorflow.keras.models import Sequential, Model
+from tensorflow.keras.optimizers import SGD, Adam
+from tensorflow.keras.callbacks import ModelCheckpoint, TensorBoard
 
 from tensorflow.keras.utils import Sequence
 from math import ceil
@@ -40,7 +40,7 @@ model_name = 'trill'
 
 def load_cremad(percent_train):
     # TODO: Change below to your crema path
-    wav_files = glob.glob('/home/groszste/Documents/CSE_842/CREMA-D/AudioWAV/*')
+    wav_files = glob.glob('../../data/AudioWAV/*')
 
     sentence_mapping = {
         'IEO':'It\'s eleven o\'clock',
@@ -192,12 +192,13 @@ for epoch in range(NUM_EPOCHS):
             logits = model(x_batch_train, training=True)  # Logits for this minibatch
             loss_value = loss_fn(y_batch_train, logits)
 
-            grads = tape.gradient(loss_value, model.trainable_weights)
-            optimizer.apply_gradients(zip(grads, model.trainable_weights))
+            grads = tape.gradient(loss_value, model.trainable_variables)
+            optimizer.apply_gradients(zip(grads, model.trainable_variables))
             if step % 200 == 0:
                 print(
                     "Training loss (for one batch) at step %d: %.4f"
                     % (step, float(loss_value))
                 )
                 print("Seen so far: %s samples" % ((step + 1) * BATCH_SIZE))
+
 model.save("saved_models")
